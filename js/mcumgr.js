@@ -1,4 +1,5 @@
-
+// Terminal Fake opcode
+const TERMINAL_OP = 0xFF;
 // Opcodes
 const MGMT_OP_READ = 0;
 const MGMT_OP_READ_RSP = 1;
@@ -137,7 +138,7 @@ class MCUTransportBluetooth extends MCUTransport {
         await this._device.gatt.disconnect();
     }
     async _disconnected() {
-        super._disconnected()
+        super._disconnected();
         this._device = null;
         this._service = null;
         this._characteristic = null;
@@ -209,14 +210,69 @@ class LineTransformer {
     constructor() {
         this._chunks = [];
         this._length = 0;
+        this._escapeSeq = [];
+        this._inEscape = 0;
+        this._inMCUMGR = false;
     }
 
     transform(chunk, controller) {
         // Handle lines ended by this chunk
-        let index = chunk.indexOf(0x0A);
+        // console.log("chunk: " + hexDump(chunk));
         let start = 0;
+        if (!this._inMCUMGR) {
+            let inEscape = this._inEscape;
+            for (var i = 0; i < chunk.length; i++) {
+                if (inEscape == 0) {
+                    if (chunk[i] == 0x1b) {
+                        inEscape++;
+                    } else if (chunk[i] == 0x06 || chunk[i] == 0x04) {
+                        // end of non-mcumgr msg 
+                        this._inMCUMGR = true;
+                        break;
+                    } else {
+                        // text to send, include it
+                        start = i + 1;
+                    }
+                } else {
+                    if (inEscape == 1 && chunk[i] == 0x5b) {
+                        //CSI. not the end yet
+                        inEscape++;
+                    } else if (chunk[i] >= 0x40 && chunk[i] <= 0x7e) {
+                        // end escape character
+                        inEscape = 0;
+                        start = i + 1;
+                        // console.log("Command: " + chunk[i].toString(16).padStart(2, '0'));
+                    } else {
+                        //CSI. input numbers
+                        inEscape++;
+                    }
+                }
+            }
+            const escapeBuff = new Uint8Array(this._inEscape + start);
+            let offset = 0;
+            for (const esc of this._escapeSeq) {
+                escapeBuff.set(esc, offset);
+                offset += esc.length;
+            }
+            // console.log("collate: " + hexDump(chunk.slice(0, start)));
+            // console.log("start: " + start);
+            // console.log("unfinished: " + inEscape);
+            // console.log("prev: " + this._inEscape);
+            escapeBuff.set(chunk.slice(0, start), offset);
+
+            if (start > 0) {
+                // console.log("write: " + hexDump(escapeBuff));
+                controller.enqueue(escapeBuff);
+                this._escapeSeq = [];
+            }
+            this._inEscape = inEscape;
+            if (inEscape > 0) {
+                // console.log("store: " + hexDump(chunk.slice(start, start + inEscape + 1)));
+                this._escapeSeq.push(chunk.slice(start, start + inEscape + 1));
+            }
+        }
+        let index = chunk.indexOf(0x0A, start);
         while (index != -1) {
-            // console.log("Chunk: " + hexDump(chunk));
             // Complete a line using previously stored chunks and the
             // start of this chunk 
             const lineBuffer = new Uint8Array(this._length + index + 1 - start); // Tekuma Fix: "- start"
@@ -228,20 +284,24 @@ class LineTransformer {
             }
             lineBuffer.set(chunk.subarray(start, index + 1), offset);
 
-            // console.log("Line: " + hexDump(lineBuffer));
+            let split = lineBuffer.indexOf(0x06);
+            // console.log("Split: " + split + ", Start: " + start + ", Line: " + hexDump(lineBuffer));
 
             // Trim carriage returns at the beginning or end of the line
             let trimmedStart = 0;
+            if (split > 0) {
+                trimmedStart = split;
+            }
             let trimmedEnd = lineBuffer.length;
 
-            for (var i = 0; i < lineBuffer.length; i++) {
+            for (var i = trimmedStart; i < lineBuffer.length; i++) {
                 if (lineBuffer[i] == 0x0D) {
                     trimmedStart++;
                 } else {
                     break;
                 }
             }
-            for (var i = lineBuffer.length - 1; i >= 0; i--) {
+            for (var i = trimmedEnd - 1; i >= 0; i--) {
                 if (lineBuffer[i] == 0x0D) {
                     trimmedEnd--;
                 } else {
@@ -251,8 +311,14 @@ class LineTransformer {
             // Output the trimmed line for downstream processing
             if (trimmedStart != 0 || trimmedEnd != lineBuffer.length) {
                 controller.enqueue(lineBuffer.slice(trimmedStart, trimmedEnd));
+                if (split > 0) {
+                    controller.enqueue(lineBuffer.slice(0, split));
+                    // console.log("Queued (term): " + hexDump(lineBuffer.slice(0, split)));
+                }
+                // console.log("Queued (slice): " + hexDump(lineBuffer.slice(trimmedStart, trimmedEnd)));
             } else {
                 controller.enqueue(lineBuffer);
+                // console.log("Queued: " + hexDump(lineBuffer));
             }
             // Clear stored chunks and keep searching
             this._chunks = [];
@@ -266,34 +332,14 @@ class LineTransformer {
         // Store any remaining bytes from the chunk for later lines
         if (start == 0) {
             this._chunks.push(chunk);
-            this._length += chunk.length - start;
+            this._length += chunk.length;
 
-            // check that the stored chunks start with 0x06 and 0x09 
-            // not sure if a stored chunk can start with 0x04 0x14
-            let validChunkStart = [0x06, 0x09];
-            let validChunkcontinue = [0x04, 0x14];
-            let offset = 0;
-            for (const storedChunk of this._chunks) {
-                for (var i = 0; i < storedChunk.length; i++) {
-                    if (storedChunk[i] != validChunkStart[offset] && storedChunk[i] != validChunkcontinue[offset]) {
-                        // console.log("Discarding stored data: " + this._length + " Mismatch: " + storedChunk[i].toString(16).padStart(2, '0'));
-                        // console.log("discard: " + hexDump(chunk));
-                        this._chunks = [];
-                        this._length = 0;
-                        return;
-                    }
-                    offset++;
-                    if (offset > 1) {
-                        // console.log("Chunk: " + hexDump(chunk));
-                        return;
-                    }
-                }
-            }
-            // console.log("Chunk: " + hexDump(chunk));
         } else if (start < chunk.length) {
             // At least one byte remaining after processing newlines
             this._chunks.push(chunk.slice(start));
             this._length += chunk.length - start;
+        } else {
+            this._inMCUMGR = false;
         }
     }
 }
@@ -330,16 +376,16 @@ class ConsoleDeframerTransformer {
     }
 
     transform(chunk, controller) {
-        if (chunk.length < 7) {
-            // Need at least the frame header, base64-encoded body,
-            // and newline
-            return;
-        }
+        // if (chunk.length < 7) {
+        //     // Need at least the frame header, base64-encoded body,
+        //     // and newline
+        //     return;
+        // }
         let newPacket = false;
         if (chunk[0] == 0x06 && chunk[1] == 0x09) {
             // Initial frame of a new packet
             if (this._numExpectedBytes != 0) {
-                // console.log(`Discarding partial packet due to new start frame`);
+                console.log(`Discarding partial packet due to new start frame`);
             }
             // Discard any existing state
             this._frameBodies = [];
@@ -351,12 +397,19 @@ class ConsoleDeframerTransformer {
             if (this._numDecodedBytes == this._numExpectedBytes) {
                 // We don't have the beginning of this packet
                 // Discard continuation frames until we get a new packet
-                // console.log(`Discarding continuation frame without start frame`);
+                console.log(`Discarding continuation frame without start frame`);
                 return;
             }
+            // } else if (chunk[0] == 0x1b && chunk[1] == 0x5b) {
+            // for only escape sequences?             
         } else {
             // Not an mcumgr frame
             // console.log(`Discarding unframed line`);
+
+            let terminalMSG = new Uint8Array(chunk.length + 1);
+            terminalMSG = [0xff, ...chunk];
+            controller.enqueue(terminalMSG);
+
             return;
         }
         // Decode the frame body from base64
@@ -394,13 +447,13 @@ class ConsoleDeframerTransformer {
             const view = new DataView(packetBuffer.buffer);
             const embeddedCrc16 = view.getUint16(packetBuffer.length - 2, false);
             const packet = packetBuffer.subarray(2, packetBuffer.length - 2);
-            const calculatedCrc16 = crc16ITUT(0x0000, packet)
+            const calculatedCrc16 = crc16ITUT(0x0000, packet);
             if (calculatedCrc16 != embeddedCrc16) {
                 // TODO: log a warning or something
                 // console.log(`CRC mismatch - expected ${embeddedCrc16}, got ${calculatedCrc16}`);
             } else {
                 // Output the packet body
-                controller.enqueue(packetBuffer.subarray(2, packetBuffer.length - 2))
+                controller.enqueue(packetBuffer.subarray(2, packetBuffer.length - 2));
             }
             // Reset state
             this._frameBodies = [];
@@ -415,6 +468,10 @@ class ConsoleDeframerTransformer {
             this._numExpectedBytes = 0;
         }
     }
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 class MCUTransportSerial extends MCUTransport {
@@ -494,6 +551,7 @@ class MCUTransportSerial extends MCUTransport {
             await this._messageStreamClosed.catch(reason => { });
         }
         if (this._writer) {
+            await this._writer.ready;
             await this._writer.close();
         }
         if (this._port) {
@@ -545,9 +603,49 @@ class MCUTransportSerial extends MCUTransport {
         if (!this._flushed) {
             // Flush the target's line buffer if this is the first time
             // we're writing to it since opening the serial connection.
+            await this._writer.ready;
             await this._writer.write(new Uint8Array([0x0D, 0x0A]));
             this._flushed = true;
+            await sleep(5);
         }
+
+        // Write each frame
+        for (const frame of frames) {
+            // console.log(hexDump(frame));
+            await this._writer.ready;
+            await this._writer.write(frame);
+
+        }
+    }
+    async userSendMessage(data) {
+        // console.log("userSendMessage");
+        // console.log(data);
+        // Split into frames no larger than the maximum frame size
+        const numFramesNeeded = Math.ceil(data.length / this._maxBodyBytesPerFrame);
+        const frames = [];
+        for (var i = 0; i < numFramesNeeded; i++) {
+            const offset = i * this._maxBodyBytesPerFrame;
+            const dataBytesRemaining = data.length - offset;
+            const numBytesToEncode = Math.min(dataBytesRemaining, this._maxBodyBytesPerFrame);
+            const subData = data.subarray(offset, offset + numBytesToEncode);
+            // const frame = new Uint8Array(1 + subData.length);
+            const frame = new Uint8Array(subData.length);
+            // Add the base64-encoded frame body
+            for (var j = 0; j < subData.length; j++) {
+                frame[j] = subData[j];
+            }
+            // Add the newline terminator
+            // frame[frame.length - 1] = 0x0a;
+            // Add the frame to the list of frames to send
+            frames.push(frame);
+        }
+
+        // if (!this._flushed) {
+        //     // Flush the target's line buffer if this is the first time
+        //     // we're writing to it since opening the serial connection.
+        //     await this._writer.write(new Uint8Array([0x0D, 0x0A]));
+        //     this._flushed = true;
+        // }
 
         // Write each frame
         for (const frame of frames) {
@@ -580,6 +678,8 @@ class MCUManager {
         this._logger = di.logger || { info: console.log, error: console.error };
         this._seq = 0;
         this._transport = null;
+
+        this._terminal = null;
     }
     async connect(type, filters) {
         switch (type) {
@@ -588,6 +688,10 @@ class MCUManager {
                 break;
             case 'serial':
                 this._transport = new MCUTransportSerial();
+                if (!this._terminal) {
+                    this._terminal = new TerminalManager();
+                    this._terminal.onSendMessage((data) => this._transport.userSendMessage(data));
+                }
                 break;
         }
 
@@ -600,6 +704,10 @@ class MCUManager {
         }
     }
     disconnect() {
+        if (this._terminal) {
+            this._terminal._close();
+            this._terminal = null;
+        }
         if (this._transport) {
             return this._transport.disconnect();
         }
@@ -658,16 +766,20 @@ class MCUManager {
         const group_hi = group >> 8;
         const message = [op, _flags, length_hi, length_lo, group_hi, group_lo, this._seq, id, ...encodedData];
         // console.log('>'  + message.map(x => x.toString(16).padStart(2, '0')).join(' '));
+        // console.log(this._seq);
         await this._transport.sendMessage(Uint8Array.from(message));
         this._seq = (this._seq + 1) % 256;
     }
     _processMessage(message) {
         const [op, _flags, length_hi, length_lo, group_hi, group_lo, _seq, id] = message;
+        if (message[0] === TERMINAL_OP) {
+            const payload = message.slice(1);
+            this._terminal._write(payload);
+            return;
+        }
         const data = CBOR.decode(message.slice(8).buffer);
         const length = length_hi * 256 + length_lo;
         const group = group_hi * 256 + group_lo;
-        // console.log(data);
-        // console.log(group + ", " + id + ", " + data.rc + ", " + data.off);
         if (group === MGMT_GROUP_ID_IMAGE && id === IMG_MGMT_ID_UPLOAD && (data.rc === 0 || data.rc === undefined) && data.off) {
             this._uploadOffset = data.off;
             this._uploadNext();

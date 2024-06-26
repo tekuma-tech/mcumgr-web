@@ -3,7 +3,8 @@ document.addEventListener('DOMContentLoaded', async event => {
 const screens = {
     initial: document.getElementById('initial-screen'),
     connecting: document.getElementById('connecting-screen'),
-    connected: document.getElementById('connected-screen')
+    connected: document.getElementById('connected-screen'),
+    terminal: document.getElementById('terminal-screen')
 };
 
 const deviceName = document.getElementById('device-name');
@@ -71,12 +72,14 @@ mcumgr.onConnecting(() => {
     screens.initial.style.display = 'none';
     screens.connected.style.display = 'none';
     screens.connecting.style.display = 'block';
+    screens.terminal.style.display = 'none';
 });
 mcumgr.onConnect(() => {
     deviceName.innerText = mcumgr.name;
     screens.connecting.style.display = 'none';
     screens.initial.style.display = 'none';
     screens.connected.style.display = 'block';
+    screens.terminal.style.display = 'block';
     imageList.innerHTML = '';
     mcumgr.cmdImageState();
 });
@@ -85,6 +88,7 @@ mcumgr.onDisconnect(() => {
     screens.connecting.style.display = 'none';
     screens.connected.style.display = 'none';
     screens.initial.style.display = 'block';
+    screens.terminal.style.display = 'none';
 });
 
 mcumgr.onMessage(({ op, group, id, data, length }) => {
