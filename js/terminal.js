@@ -1,6 +1,5 @@
 const CSI_HEX = [0x1B, 0x5B];
 
-import { Terminal } from '@xterm/xterm';
 
 class TerminalManager {
     constructor() {
