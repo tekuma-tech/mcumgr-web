@@ -165,6 +165,14 @@ mcumgr.onImageUploadFinished(() => {
     mcumgr.cmdImageState();
 });
 
+mcumgr.onImageUploadFailed(() => {
+    fileStatus.innerText = 'Upload failed';
+    fileInfo.innerHTML = '';
+    fileImage.value = '';
+    mcumgr.cmdImageState();
+});
+
+
 fileImage.addEventListener('change', () => {
     file = fileImage.files[0];
     fileData = null;

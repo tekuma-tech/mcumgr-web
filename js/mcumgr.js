@@ -701,6 +701,7 @@ class MCUManager {
         this._disconnectCallback = null;
         this._messageCallback = null;
         this._imageUploadProgressCallback = null;
+        this._imageUploadFailedCallback = null;
         this._uploadIsInProgress = false;
 
         this._logger = di.logger || { info: console.log, error: console.error };
@@ -765,6 +766,10 @@ class MCUManager {
         this._imageUploadFinishedCallback = callback;
         return this;
     }
+    onImageUploadFailed(callback) {
+        this._imageUploadFailedCallback = callback;
+        return this;
+    }
     async _connected() {
         if (this._connectCallback) this._connectCallback();
         if (this._uploadIsInProgress) {
@@ -814,6 +819,7 @@ class MCUManager {
             return;
         }
         if (this._messageCallback) this._messageCallback({ op, group, id, data, length });
+        if (this._uploadIsInProgress && data.off <= this._uploadOffset) this._uploadInterrupted();
     }
     cmdReset() {
         return this._sendMessage(MGMT_OP_WRITE, MGMT_GROUP_ID_OS, OS_MGMT_ID_RESET);
@@ -872,6 +878,10 @@ class MCUManager {
         this._uploadSlot = slot;
 
         this._uploadNext();
+    }
+    async _uploadInterrupted() {
+        this._uploadIsInProgress = false;
+         if (this._imageUploadFailedCallback) this._imageUploadFailedCallback();
     }
     async imageInfo(image) {
         // https://interrupt.memfault.com/blog/mcuboot-overview#mcuboot-image-binaries
