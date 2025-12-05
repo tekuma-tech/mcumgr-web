@@ -492,18 +492,18 @@ class MCUTransportSerial extends MCUTransport {
             if (!this._userRequestedDisconnect) {
                 this._logger.info('Trying to reconnect');
                 var intervalLoops = 0;
-                var intervalID = setInterval(async () => {
+                this._intervalID = setInterval(async () => {
                     this._logger.info('Polling devices');
                     intervalLoops++;
                     this._ports = await navigator.serial.getPorts();
                     this._ports.forEach(element => {
                         if (element.getInfo().usbProductId == this._lastPID) {
                             this._port = element;
-                            clearInterval(intervalID);
+                            clearInterval(this._intervalID);
                             this._connect(0);
                         }
                         if (intervalLoops >= 30) {
-                            clearInterval(intervalID);
+                            clearInterval(this._intervalID);
                         }
                     });
                 }, 1000);
@@ -525,6 +525,9 @@ class MCUTransportSerial extends MCUTransport {
         setTimeout(async () => {
             try {
                 this._connecting();
+                if (this._intervalID) {
+                    clearInterval(this._intervalID);
+                }
                 const options = {
                     baudRate: 115200
                 };
@@ -881,7 +884,7 @@ class MCUManager {
     }
     async _uploadInterrupted() {
         this._uploadIsInProgress = false;
-         if (this._imageUploadFailedCallback) this._imageUploadFailedCallback();
+        if (this._imageUploadFailedCallback) this._imageUploadFailedCallback();
     }
     async imageInfo(image) {
         // https://interrupt.memfault.com/blog/mcuboot-overview#mcuboot-image-binaries
