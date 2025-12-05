@@ -486,21 +486,37 @@ class MCUTransportSerial extends MCUTransport {
         // Keep track of whether we know the target's input line buffer state
         this._flushed = false;
     }
-
+    async reconnect(event) {
+        this._logger.info(event);
+        this._disconnected().then(async event => {
+            if (!this._userRequestedDisconnect) {
+                this._logger.info('Trying to reconnect');
+                var intervalLoops = 0;
+                var intervalID = setInterval(async () => {
+                    this._logger.info('Polling devices');
+                    intervalLoops++;
+                    this._ports = await navigator.serial.getPorts();
+                    this._ports.forEach(element => {
+                        if (element.getInfo().usbProductId == this._lastPID) {
+                            this._port = element;
+                            this._port.addEventListener('disconnect', async event => this.reconnect(event));
+                            clearInterval(intervalID);
+                            this._connect(0);
+                        }
+                        if (intervalLoops >= 30) {
+                            clearInterval(intervalID);
+                        }
+                    });
+                }, 1000);
+            }
+        });
+    }
     async connect(filters) {
         try {
             this._port = await navigator.serial.requestPort(filters);
             this._logger.info(`Connecting to device ${this.name}...`);
             if (this._port) {
-                this._port.addEventListener('disconnect', async event => {
-                    this._logger.info(event);
-                    if (!this._userRequestedDisconnect) {
-                        this._logger.info('Trying to reconnect');
-                        this._connect(1000);
-                    } else {
-                        this._disconnected();
-                    }
-                });
+                this._port.addEventListener('disconnect', async event => this.reconnect(event));
             }
             this._connect(0);
         } catch (error) {
@@ -518,14 +534,18 @@ class MCUTransportSerial extends MCUTransport {
                 };
                 await this._port.open(options);
                 this._logger.info(`Port opened.`);
-                this._inputStream = new TransformStream(new LineTransformer())
+                this._inputStream = new TransformStream(new LineTransformer());
                 this._inputStreamClosed = this._port.readable.pipeTo(this._inputStream.writable);
+                this._inputStreamClosed.catch(reason => { });
                 this._messageStream = new TransformStream(new ConsoleDeframerTransformer());
                 this._messageStreamClosed = this._inputStream.readable.pipeTo(this._messageStream.writable);
+                this._messageStreamClosed.catch(reason => { });
                 this._reader = this._messageStream.readable.getReader();
-                this._readIncoming(this._reader)
+                this._reader.closed.catch(reason => { });
+                this._readIncoming(this._reader);
                 this._writer = this._port.writable.getWriter();
                 await this._connected();
+                this._lastPID = this._port.getInfo().usbProductId;
             } catch (error) {
                 this._logger.error(error);
                 await this._disconnected();
@@ -546,7 +566,7 @@ class MCUTransportSerial extends MCUTransport {
     async disconnect() {
         await super.disconnect();
         if (this._reader) {
-            this._reader.cancel();
+            this._reader.cancel().catch(reason => { });
             await this._inputStreamClosed.catch(reason => { });
             await this._messageStreamClosed.catch(reason => { });
         }
@@ -563,6 +583,7 @@ class MCUTransportSerial extends MCUTransport {
         return "Serial";
     }
     async sendMessage(data) {
+
         const packetLength = data.byteLength + 2;
         const calculatedCrc16 = crc16ITUT(0x0000, data);
         // Concatenate the length, packet, and CRC16 together
@@ -609,12 +630,16 @@ class MCUTransportSerial extends MCUTransport {
             await sleep(5);
         }
 
-        // Write each frame
-        for (const frame of frames) {
-            // console.log(hexDump(frame));
-            await this._writer.ready;
-            await this._writer.write(frame);
+        try {
+            // Write each frame
+            for (const frame of frames) {
+                // console.log(hexDump(frame));
+                await this._writer.ready;
+                await this._writer.write(frame);
 
+            }
+        } catch (error) {
+            this._logger.error(error);
         }
     }
     async userSendMessage(data) {
@@ -653,14 +678,18 @@ class MCUTransportSerial extends MCUTransport {
         }
     }
     async _readIncoming(reader) {
-        while (true) {
-            const { value, done } = await this._reader.read();
-            if (value) {
-                this._rawMessage(value);
+        try {
+            while (true) {
+                const { value, done } = await this._reader.read();
+                if (value) {
+                    this._rawMessage(value);
+                }
+                if (done) {
+                    break;
+                }
             }
-            if (done) {
-                break;
-            }
+        } catch (error) {
+            // this._logger.error(error);
         }
     }
 }
@@ -797,7 +826,8 @@ class MCUManager {
         return this._sendMessage(MGMT_OP_READ, MGMT_GROUP_ID_IMAGE, IMG_MGMT_ID_STATE, {});
     }
     cmdImageErase() {
-        return this._sendMessage(MGMT_OP_WRITE, MGMT_GROUP_ID_IMAGE, IMG_MGMT_ID_ERASE, {});
+        this._sendMessage(MGMT_OP_WRITE, MGMT_GROUP_ID_IMAGE, IMG_MGMT_ID_ERASE, {});
+        return this.cmdImageState();
     }
     cmdImageTest(hash) {
         return this._sendMessage(MGMT_OP_WRITE, MGMT_GROUP_ID_IMAGE, IMG_MGMT_ID_STATE, { hash, confirm: false });
