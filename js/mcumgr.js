@@ -487,7 +487,7 @@ class MCUTransportSerial extends MCUTransport {
         this._flushed = false;
     }
     async reconnect(event) {
-        this._logger.info(event);
+        // this._logger.info(event);
         this._disconnected().then(async event => {
             if (!this._userRequestedDisconnect) {
                 this._logger.info('Trying to reconnect');
@@ -499,7 +499,6 @@ class MCUTransportSerial extends MCUTransport {
                     this._ports.forEach(element => {
                         if (element.getInfo().usbProductId == this._lastPID) {
                             this._port = element;
-                            this._port.addEventListener('disconnect', async event => this.reconnect(event));
                             clearInterval(intervalID);
                             this._connect(0);
                         }
@@ -515,9 +514,6 @@ class MCUTransportSerial extends MCUTransport {
         try {
             this._port = await navigator.serial.requestPort(filters);
             this._logger.info(`Connecting to device ${this.name}...`);
-            if (this._port) {
-                this._port.addEventListener('disconnect', async event => this.reconnect(event));
-            }
             this._connect(0);
         } catch (error) {
             this._logger.error(error);
@@ -546,6 +542,8 @@ class MCUTransportSerial extends MCUTransport {
                 this._writer = this._port.writable.getWriter();
                 await this._connected();
                 this._lastPID = this._port.getInfo().usbProductId;
+                this.reconnect = this.reconnect.bind(this)
+                this._port.addEventListener('disconnect', this.reconnect);
             } catch (error) {
                 this._logger.error(error);
                 await this._disconnected();
@@ -565,6 +563,7 @@ class MCUTransportSerial extends MCUTransport {
     }
     async disconnect() {
         await super.disconnect();
+        this._port.removeEventListener('disconnect', this.reconnect);
         if (this._reader) {
             this._reader.cancel().catch(reason => { });
             await this._inputStreamClosed.catch(reason => { });
