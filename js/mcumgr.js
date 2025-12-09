@@ -502,10 +502,10 @@ class MCUTransportSerial extends MCUTransport {
                             clearInterval(this._intervalID);
                             this._connect(0);
                         }
-                        if (intervalLoops >= 30) {
-                            clearInterval(this._intervalID);
-                        }
                     });
+                    if (intervalLoops >= 30) {
+                        clearInterval(this._intervalID);
+                    }
                 }, 1000);
             }
         });
