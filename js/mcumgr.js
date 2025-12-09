@@ -500,7 +500,7 @@ class MCUTransportSerial extends MCUTransport {
                         if (element.getInfo().usbProductId == this._lastPID) {
                             this._port = element;
                             clearInterval(this._intervalID);
-                            if(!(this._port.readable.locked || this._port.writable.locked)){
+                            if(!((this._port.readable ? this._port.readable.locked : 0) || (this._port.writable ? this._port.writable.locked : 0))){
                                 this._connect(0);
                             }
                         }
