@@ -706,6 +706,8 @@ class MCUManager {
         this._imageUploadProgressCallback = null;
         this._imageUploadFailedCallback = null;
         this._uploadIsInProgress = false;
+        this._flashAfterUpload = false;
+        this._flashAfterUploadCallback;
 
         this._logger = di.logger || { info: console.log, error: console.error };
         this._seq = 0;
@@ -765,8 +767,13 @@ class MCUManager {
         this._imageUploadProgressCallback = callback;
         return this;
     }
+
     onImageUploadFinished(callback) {
         this._imageUploadFinishedCallback = callback;
+        return this;
+    }
+    onImageUploadFlash(callback) {
+        this._flashAfterUploadCallback = callback;
         return this;
     }
     onImageUploadFailed(callback) {
@@ -849,7 +856,12 @@ class MCUManager {
     async _uploadNext() {
         if (this._uploadOffset >= this._uploadImage.byteLength) {
             this._uploadIsInProgress = false;
-            this._imageUploadFinishedCallback();
+            if (this._flashAfterUpload) {
+                this._flashAfterUpload = false;
+                this._flashAfterUploadCallback();
+            } else {
+                this._imageUploadFinishedCallback();
+            }
             return;
         }
 
@@ -869,6 +881,10 @@ class MCUManager {
 
         this._sendMessage(MGMT_OP_WRITE, MGMT_GROUP_ID_IMAGE, IMG_MGMT_ID_UPLOAD, message);
     }
+    async cmdUploadAndProgram(image, slot = 0) {
+        this._flashAfterUpload = true;
+        this.cmdUpload(image, slot);
+    }
     async cmdUpload(image, slot = 0) {
         if (this._uploadIsInProgress) {
             this._logger.error('Upload is already in progress.');
@@ -884,6 +900,7 @@ class MCUManager {
     }
     async _uploadInterrupted() {
         this._uploadIsInProgress = false;
+        this._flashAfterUpload = false;
         if (this._imageUploadFailedCallback) this._imageUploadFailedCallback();
     }
     async imageInfo(image) {
