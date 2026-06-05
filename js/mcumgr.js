@@ -158,7 +158,8 @@ class MCUTransportBluetooth extends MCUTransport {
         this._buffer = this._buffer.slice(messageLength + 8);
     }
     get name() {
-        return this._device && this._device.name;
+        // return this._device && this._device.name;
+        return 'bluetooth';
     }
 }
 
@@ -526,7 +527,7 @@ class MCUTransportSerial extends MCUTransport {
     _connect(timeout) {
         setTimeout(async () => {
             try {
-                this._connecting();
+                this._connecting(); // 'connecting...'
                 if (this._intervalID) {
                     clearInterval(this._intervalID);
                 }
@@ -556,7 +557,7 @@ class MCUTransportSerial extends MCUTransport {
         }, timeout);
     }
     async _disconnected() {
-        super._disconnected()
+        super._disconnected() // 'Disconnected.'
         this._port = null;
         this._inputStream = null;
         this._inputStreamClosed = null;
@@ -584,7 +585,8 @@ class MCUTransportSerial extends MCUTransport {
         await this._disconnected();
     }
     get name() {
-        return "Serial";
+        // return this._device && this._device.name;
+        return "serial";
     }
     async sendMessage(data) {
 
@@ -718,12 +720,24 @@ class MCUManager {
         this._terminal = null;
     }
     async connect(type, filters) {
+        if(this._transport != null){
+            if(this._transport.name !== type){
+                if (this._transport.name === 'serial'){
+                    clearInterval(this._transport._intervalID); // cancel serial-reconnect if connecting with bluetooth
+                }
+                this._transport = null;
+            }
+        }
         switch (type) {
             case 'bluetooth':
-                this._transport = new MCUTransportBluetooth();
+                if(this._transport == null){
+                    this._transport = new MCUTransportBluetooth();
+                }    
                 break;
             case 'serial':
-                this._transport = new MCUTransportSerial();
+                if(this._transport == null){
+                    this._transport = new MCUTransportSerial();
+                }
                 if (!this._terminal) {
                     this._terminal = new TerminalManager();
                     this._terminal.onSendMessage((data) => this._transport.userSendMessage(data));
